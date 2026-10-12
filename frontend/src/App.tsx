@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { allEdges, cityByName, citySpecs, edgeDistance, type Algorithm, type CityName, type PathfindingResponse } from "./lib/pathfinding";
 import "./App.css";
+import githubLogo from "./assets/GitHub_Invertocat_White.svg";
 
 const MAP_WIDTH = 1822;
 const MAP_HEIGHT = 1303;
@@ -144,7 +145,7 @@ function App() {
       <header className="topbar">
         <div className="brand-mark"><Icon name="compass" width="28" height="28" /></div>
         <div><div className="brand-kicker">An interactive road atlas</div><h1>Romanian Pathfinder<span>.</span></h1></div>
-        <div className="topbar-note"><span className="status-dot" />20 cities <span className="note-divider">/</span> 23 connections</div>
+        <div className="topbar-note"><span className="status-dot" />20 cities <span className="note-divider">/</span> 23 connections <span className="note-divider">/</span><a href="https://github.com/PyPhu/Romania-Pathfinding " target="_blank" rel="noopener noreferrer"><img height="20" src={githubLogo} alt="GitHub logo" /></a></div>
       </header>
 
       <main className="workspace">
