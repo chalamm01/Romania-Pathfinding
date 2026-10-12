@@ -1,5 +1,6 @@
 import heapq
 from math import inf
+from functools import lru_cache
 
 from graphAstar import (
     graph,
@@ -8,6 +9,13 @@ from graphAstar import (
     city_to_group,
     group_edges,
 )
+
+# ============================================================
+# CACHING LAYER - Memoization for performance
+# ============================================================
+
+_group_graph_cache = None
+_group_heuristics_cache = {}
 
 
 # ============================================================
@@ -52,6 +60,7 @@ def validate_city(city):
 def build_group_graph():
     """
     Convert group_edges into a simple graph between groups.
+    Cached after first build for performance.
 
     Example:
 
@@ -64,6 +73,11 @@ def build_group_graph():
     If there are multiple connections between two groups,
     keep the cheapest one.
     """
+
+    global _group_graph_cache
+
+    if _group_graph_cache is not None:
+        return _group_graph_cache
 
     group_graph = {
         group_id: {}
@@ -88,6 +102,7 @@ def build_group_graph():
                 "to_city": city_b,
             }
 
+    _group_graph_cache = group_graph
     return group_graph
 
 
@@ -106,7 +121,14 @@ def calculate_group_distances(goal_group):
 
     Because this is the exact shortest group distance,
     it is admissible as a heuristic.
+
+    Results are cached to avoid recalculation.
     """
+
+    global _group_heuristics_cache
+
+    if goal_group in _group_heuristics_cache:
+        return _group_heuristics_cache[goal_group]
 
     group_graph = build_group_graph()
 
@@ -146,6 +168,7 @@ def calculate_group_distances(goal_group):
                     (new_distance, neighbor_group)
                 )
 
+    _group_heuristics_cache[goal_group] = distances
     return distances
 
 
@@ -276,23 +299,24 @@ def group_astar(start_group, goal_group):
 
 
 # ============================================================
-# 6. A* inside one group
+# 6. A* inside one group (with caching)
 # ============================================================
 
-def local_astar(start_city, goal_city):
+@lru_cache(maxsize=1024)
+def _local_astar_cached(start_city, goal_city):
     """
-    Normal A* search inside the city graph.
-
-    This searches the whole graph, but is used to calculate
-    the local path between two cities.
+    Cached version of local A* that returns tuple for hashability.
+    
+    Returns:
+        (tuple(path), cost, tuple(visited_nodes))
     """
 
     if start_city == goal_city:
-        return {
-            "path": [start_city],
-            "cost": 0,
-            "visited_nodes": []
-        }
+        return (
+            (start_city,),
+            0,
+            ()
+        )
 
     open_set = []
 
@@ -341,11 +365,11 @@ def local_astar(start_city, goal_city):
 
             path.reverse()
 
-            return {
-                "path": path,
-                "cost": g_score[goal_city],
-                "visited_nodes": visited_nodes
-            }
+            return (
+                tuple(path),
+                g_score[goal_city],
+                tuple(visited_nodes)
+            )
 
         for neighbor, edge_cost in graph[current_city].items():
 
@@ -375,13 +399,35 @@ def local_astar(start_city, goal_city):
     )
 
 
+def local_astar(start_city, goal_city):
+    """
+    Normal A* search inside the city graph with automatic caching.
+
+    This searches the whole graph, but is used to calculate
+    the local path between two cities.
+    
+    Results are cached to avoid recalculation of the same paths.
+    """
+
+    path_tuple, cost, visited_nodes_tuple = _local_astar_cached(start_city, goal_city)
+
+    return {
+        "path": list(path_tuple),
+        "cost": cost,
+        "visited_nodes": list(visited_nodes_tuple)
+    }
+
+
 # ============================================================
 # 7. Find connection between two groups (Upgraded)
 # ============================================================
 
 def find_best_group_connection(current_city, current_group, next_group, goal_city, goal_group):
     """
-    Find the best connection between two groups by evaluating the actual local path cost.
+    Find the best connection between two groups using heuristic estimation.
+    
+    Instead of running full A* for each connection, we use heuristic distances
+    to estimate the total cost, making this O(n) instead of O(n * A*).
     """
     if next_group not in group_edges.get(current_group, {}):
         raise ValueError(f"No connection between {current_group} and {next_group}")
@@ -393,17 +439,23 @@ def find_best_group_connection(current_city, current_group, next_group, goal_cit
     
     for exit_city, entry_city, edge_cost in connections:
         
-        # 1. Cost from current city to the exit city of this group
-        path_to_exit = local_astar(current_city, exit_city)
-        cost_to_exit = path_to_exit["cost"]
+        # Use heuristic distance instead of full A* for estimation
+        # This is much faster: O(1) lookup instead of O(E log V)
+        heuristic_to_exit = heuristic.get(exit_city, 0)
+        heuristic_from_entry = heuristic.get(entry_city, 0)
         
-        # 2. Cost from the entry city to the goal (if the next group is the goal group)
-        cost_to_goal = 0
+        # Estimate cost using heuristic difference
+        estimated_cost_to_exit = heuristic.get(current_city, 0) - heuristic_to_exit
+        
+        estimated_cost_to_goal = 0
         if next_group == goal_group:
-            path_to_goal = local_astar(entry_city, goal_city)
-            cost_to_goal = path_to_goal["cost"]
-            
-        total_estimated_cost = cost_to_exit + edge_cost + cost_to_goal
+            estimated_cost_to_goal = heuristic_from_entry - heuristic.get(goal_city, 0)
+        
+        # Clamp negative values (heuristic can be lower in some cases)
+        estimated_cost_to_exit = max(0, estimated_cost_to_exit)
+        estimated_cost_to_goal = max(0, estimated_cost_to_goal)
+        
+        total_estimated_cost = estimated_cost_to_exit + edge_cost + estimated_cost_to_goal
         
         if total_estimated_cost < best_total_cost:
             best_total_cost = total_estimated_cost
